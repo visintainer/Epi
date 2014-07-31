@@ -1,0 +1,21 @@
+ili <- read.table("ILI-data",header=TRUE,as.is=TRUE)
+
+ili$D=ili$Week*7-3.5
+ili$P=round(ili$TotN*ili$Pos/100,0)
+
+EE <- smooth.spline(ili$D,ili$Pos,keep.data=TRUE,spar = 0.28)
+
+StartD <- as.integer(as.Date("2009-01-01"))
+PredDay <- predict(EE,1:(15*7))
+
+write.table(t(PredDay$y),file="ILIdata.tsv",quote=FALSE,sep="\t",row.names=FALSE,col.names=FALSE)
+
+PredDay$x <- PredDay$x + StartD - 1
+
+plot(PredDay,ylim=c(0,38),col="blue",cex=1,pch=20)
+points(ili$D,ili$Pos,col="red",pch=20,cex=2)
+for(i in 1:nrow(ili)){
+    bt=binom.test(ili$P[i],ili$TotN[i])
+    print(bt)
+    lines(c(ili$D[i],ili$D[i]),100*c(bt[[4]][1],bt[[4]][2]),lw=2)
+}

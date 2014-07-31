@@ -1,0 +1,635 @@
+## Proxy <- read.csv("../Data-Lepri/Proximity.csv", header=TRUE, as.is=TRUE)
+## Proxy$date <- as.Date(Proxy$time)
+## Symp <- read.csv("../Data-Lepri/FluSymptoms.csv", header=TRUE, as.is=TRUE)
+## Symp$date <- as.Date(Symp$time)
+
+## Merge Symptoms measured in the same day
+i=1
+while (i < (dim(Symp)[1]-1)){
+    if ((Symp$date[i] == Symp$date[i+1]) && (Symp$user_id[i] == Symp$user_id[i+1])){
+        Symp[i+1,c(3:7)] <- as.numeric(Symp[i,c(3:7)] | Symp[(i+1),c(3:7)])
+        Symp <- Symp[-i,]  
+    }else{
+        i <-  i+1
+    }
+}
+
+library(lattice)     
+library(matrixStats)
+library(nettools)
+library(igraph)
+require(gridExtra)
+library(ape) ## just for reppresentation
+source("functions.R")
+## save(Symp,Proxy,file='1-data.RData')
+load('1-data.RData')
+
+OrigD <- "1970-01-01"
+lat <- 0
+gap <- 7
+
+Soggetti <- unique(Proxy$user.id)
+
+## Either Sore Throat Or Runny Nose
+dis1 <- Symp[,3] | Symp[,4]
+## Both Sore Throat And Runny Nose
+## dis2 <- Symp[,3] & Symp[,4]
+## Fever
+dis2 <- as.logical(Symp[,5])
+dis3 <- (Symp[,3] & Symp[,6]) | (Symp[,3] & Symp[,5])
+
+dis1 <- fillgap(dis1,gap)
+dis2 <- fillgap(dis2,gap)
+dis3 <- fillgap(dis3,gap)
+
+events1 <- getevents(dis1)
+events2 <- getevents(dis2)
+events3 <- getevents(dis3)
+
+## Get Dates
+start1.D <- min(events1$da1)
+stop1.D <- max(events1$da2)
+start2.D <- min(events2$da1)
+stop2.D <- max(events2$da2)
+start3.D <- min(events3$da1)
+stop3.D <- max(events3$da2)
+
+symptoms1 <- getsymptoms(events1,start1.D,stop1.D)
+symptoms1 <- symptoms1[unique(events1$id),]
+symptoms2 <- getsymptoms(events2,start2.D,stop2.D)
+symptoms2 <- symptoms2[unique(events2$id),]
+symptoms3 <- getsymptoms(events3,start3.D,stop3.D)
+symptoms3 <- symptoms3[unique(events3$id),]
+
+plotsympt(symptoms1,start1.D,stop1.D,OrigD, main="Symptoms1")
+plotsympt(symptoms2,start2.D,stop2.D,OrigD, main="Symptoms2")
+plotsympt(symptoms3,start3.D,stop3.D,OrigD, main="Symptoms3")
+
+## save.image("1bis-data.RData")
+load("1bis-data.RData")
+
+## Get Conections during events
+connections1 <- getconnections(events1,Proxy,start1.D,stop1.D,OrigD)
+connections2 <- getconnections(events2,Proxy,start2.D,stop2.D,OrigD)
+connections3 <- getconnections(events3,Proxy,start3.D,stop3.D,OrigD)
+## save(connections1,connections2,connections3,file='2-data.RData')
+load('2-data.RData')
+
+## Get unique connections during events
+uniqueconnections1 <- getuniqueconnections(events1,Proxy,start1.D,stop1.D,OrigD)
+uniqueconnections2 <- getuniqueconnections(events2,Proxy,start2.D,stop2.D,OrigD)
+uniqueconnections3 <- getuniqueconnections(events3,Proxy,start3.D,stop3.D,OrigD)
+## save(uniqueconnections1,uniqueconnections2,uniqueconnections3,file='3-data.RData')
+load('3-data.RData')
+
+## Get Conections
+connectionsALL <- getallconnections(Proxy,start1.D,stop1.D,OrigD,Soggetti)
+
+## Get unique connections
+uniqueconnectionsALL <- getalluniqueconnections(Proxy,start1.D,stop1.D,OrigD,Soggetti)
+## save(connectionsALL,uniqueconnectionsALL,file='4-data.RData')
+load('4-data.RData')
+
+## Get connection map Day to Subject
+IDconnectionsALL.D.S <- getallIDconnections.D.S(Proxy,start1.D,stop1.D,OrigD,Soggetti)
+## Get connection map Subject to Day
+IDconnectionsALL.S.D <- getallIDconnections.S.D(Proxy,start1.D,stop1.D,OrigD,1:80)
+
+## Generate AdjList
+AdjL <- list()
+for (d in names(IDconnectionsALL.D.S)){
+    AdjL[[d]] <- matrix(0, length(Soggetti)l,ength(Soggetti))
+    colnames(AdjL[[d]]) <- Soggetti
+    row.names(AdjL[[d]]) <- Soggetti
+    for (s in names(IDconnectionsALL.D.S[[d]])){
+        T <- table(IDconnectionsALL.D.S[[d]][[s]])
+        AdjL[[d]][s,names(T)] <- T
+    }
+}
+ddM <- netdist(AdjL)
+fit <- cmdscale(ddM$HIM,eig=TRUE, k=5)
+
+x <- fit$points[,1]
+y <- fit$points[,2]
+mycol <- c(rep("green",22),rep("yellow4",28),rep("orange", 31),rep("red",18))
+
+plot(x, y, xlab="Coordinate 1", ylab="Coordinate 2",
+  main="Metric MDS", type="n")
+plot(x, y-0.0018, col = mycol, pch=19)
+text(x, y, labels = names(AdjL), cex=.7, col = mycol)
+
+
+## save(AdjL,ddM,IDconnectionsALL.D.S,IDconnectionsALL.S.D,file='5-data.RData')
+load('5-data.RData')
+
+## Compute masks for infective periods
+mask1symp <- matrix(FALSE,dim(connections1)[1],dim(connections1)[2])
+colnames(mask1symp) <- colnames(connections1)
+rownames(mask1symp) <- rownames(connections1)
+for (s in 1:length(events1$id)){
+    mask1symp[as.character(events1$id[s]),as.character(as.Date(events1$da1[s]:events1$da2[s],origin=OrigD))] <- TRUE
+}
+
+mask2symp <- matrix(FALSE,dim(connections2)[1],dim(connections2)[2])
+colnames(mask2symp) <- colnames(connections2)
+rownames(mask2symp) <- rownames(connections2)
+for (s in 1:length(events2$id)){
+    mask2symp[as.character(events2$id[s]),as.character(as.Date(events2$da1[s]:events2$da2[s],origin=OrigD))] <- TRUE
+}
+
+mask3symp <- matrix(FALSE,dim(connections3)[1],dim(connections3)[2])
+colnames(mask3symp) <- colnames(connections3)
+rownames(mask3symp) <- rownames(connections3)
+for (s in 1:length(events3$id)){
+    mask3symp[as.character(events3$id[s]),as.character(as.Date(events3$da1[s]:events3$da2[s],origin=OrigD))] <- TRUE
+}
+
+allc <- list()
+P <- Proxy[,c(1,2)]
+for (s in 1:length(Soggetti)){
+    allc[as.character(Soggetti[s])] <- sum(P==Soggetti[s])
+}
+
+##Plot Connections Total
+plotconn(connections1,uniqueconnections1,start1.D,stop1.D,OrigD)
+X11()
+plotconn(connections2,uniqueconnections2,start2.D,stop2.D,OrigD)
+X11()
+plotconn(connections3,uniqueconnections3,start2.D,stop2.D,OrigD)
+X11()
+plotconn(connectionsALL,uniqueconnectionsALL,start1.D,stop1.D,OrigD)
+
+##Plot
+X11()
+conn <- uniqueconnections2
+ev <- events2
+print(unique(ev$id))
+Sog <- 75
+col.l=rep("green",length(date)-1)
+col.s=rep("green",length(date))
+evv <- ev[which(ev$id==Sog),]
+for (i in 1:dim(evv)[1]){
+    col.l[which(date>=evv$da1[i] & date<=evv$da2[i])]="red"
+    col.s[which(date>=evv$da1[i] & date<=evv$da2[i])]="red"
+}
+xyplot(conn[as.character(Sog),]~as.Date(c(start2.D:stop2.D) ,origin=OrigD),
+       type="b",
+       auto.key = TRUE,
+       col.line=c("green","red"),
+       pch=20,
+       cex=2,
+       lwd=2,
+       lty=1,
+       col.symbol=col.s
+       )
+
+hist(events1$id,breaks=80,freq=FALSE)
+
+postscript(file="../report/Rilevazioni.ps",height=4,width=8,onefile=TRUE,horizontal=FALSE)
+
+hist(Proxy$date,
+     #xlim=c(as.Date("2008-10-01",origin=OrigD),max(Proxy$date)),
+     xlim=c(as.Date("2009-01-01",origin=OrigD),as.Date("2009/03/31")),
+     main="Rilevazioni dal 2009-10-01 al 2009-03-31", breaks=280)
+## hist(Symp$date,breaks=500)
+abline(v=min(events1$da1),lwd=2,col="red")
+abline(v=max(events1$da2),lwd=2,col="red")
+abline(v=min(events2$da1),lwd=2,col="blue")
+abline(v=max(events2$da2),lwd=2,col="blue")
+abline(v=min(events3$da1),lwd=2,col="green")
+abline(v=max(events3$da2),lwd=2,col="green")
+for(i in 1:dim(events2)[1]){
+    abline(v=max(events2$da1[i]),lwd=5,col="blue")
+}
+for(i in 1:dim(events3)[1]){
+    abline(v=max(events3$da1[i]),lwd=2,col="red")
+}
+
+
+dev.off()
+
+## GRAFICO1:
+## a) distribuzione del numero di eventi sintomatici per persona per EV.SINTOMO1
+postscript(file="../report/Grafico1-a-b.ps",height=8,width=8,onefile=TRUE,horizontal=FALSE)
+par(mfrow=c(2,1))
+hist(table(events1$id),breaks=20,main="(a)")#,xlim=c(0,8))
+## b) distribuzione del numero di eventi sintomatici per persona per EV.SINTOMO2 
+hist(table(events3$id),breaks=20,main="(b)")#,xlim=c(0,8))
+dev.off()
+
+## GRAFICO2:
+postscript(file="../report/Grafico2-a.ps",height=8,width=8,onefile=TRUE,horizontal=FALSE)
+## a) numero di EV.SINTOMO1 nel tempo 
+plotsympt(symptoms1,start.D,stop.D,OrigD)
+dev.off()
+
+postscript(file="../report/Grafico2-b.ps",height=8,width=8,onefile=TRUE,horizontal=FALSE)
+## b) numero di EV.SINTOMO2 nel tempo 
+plotsympt(symptoms3,start.D,stop.D,OrigD)
+dev.off()
+
+## GRAFICO3:
+
+## a) distribuzione  del numero medio di contatti giornalieri che un individuo ha (media calcolata over time) secondo definizione di NCONTATTI1
+postscript(file="../report/Grafico3-a.ps",height=6,width=8,onefile=TRUE,horizontal=FALSE)
+hist(rowMeans(connectionsALL,na.rm=TRUE),breaks=50, main="3 a")
+dev.off()
+
+## b) distribuzione  del numero medio di contatti giornalieri che un individuo ha (media calcolata over time) IN ASSENZA DI SINTOMI1 secondo definizione di NCONTATTI1
+postscript(file="../report/Grafico3-b.ps",height=8,width=8,onefile=TRUE,horizontal=FALSE)
+hist(rowMeans((connections1 * !mask1symp),na.rm=TRUE),breaks=20, main="3 b")
+dev.off()
+## c) distribuzione  del numero medio di contatti giornalieri che un individuo ha (media calcolata over time) IN PRESENZA DI SINTOMI1 secondo definizione di NCONTATTI1
+postscript(file="../report/Grafico3-c.ps",height=8,width=8,onefile=TRUE,horizontal=FALSE)
+hist(rowMeans((connections1 * mask1symp),na.rm=TRUE),breaks=20, main="3 c")
+dev.off()
+## d) distribuzione  del numero medio di contatti giornalieri che un individuo ha (media calcolata over time) IN ASSENZA DI SINTOMI2 secondo definizione di NCONTATTI1
+postscript(file="../report/Grafico3-d.ps",height=8,width=8,onefile=TRUE,horizontal=FALSE)
+hist(rowMeans((connections3 * !mask3symp),na.rm=TRUE),breaks=20, main="3 d")
+dev.off()
+## e) distribuzione  del numero medio di contatti giornalieri che un individuo ha (media calcolata over time) IN PRESENZA DI SINTOMI2 secondo definizione di NCONTATTI1
+postscript(file="../report/Grafico3-e.ps",height=8,width=8,onefile=TRUE,horizontal=FALSE)
+hist(rowMeans((connections3 * mask3symp),na.rm=TRUE),breaks=20, main="3 e")
+dev.off()
+
+
+## GRAFICO4:
+## a) distribuzione  del numero medio di contatti giornalieri che un individuo ha (media calcolata over time) secondo definizione di NCONTATTI2
+postscript(file="../report/Grafico4-a.ps",height=6,width=8,onefile=TRUE,horizontal=FALSE)
+hist(rowMeans(uniqueconnectionsALL,na.rm=TRUE),breaks=20, main="4 a")#,xlim=c(0,1000))
+dev.off()
+
+## b) distribuzione  del numero medio di contatti giornalieri che un individuo ha (media calcolata over time) IN ASSENZA DI SINTOMI1 secondo definizione di NCONTATTI2
+postscript(file="../report/Grafico4-b.ps",height=8,width=8,onefile=TRUE,horizontal=FALSE)
+hist(rowMeans((uniqueconnections1 * !mask1symp),na.rm=TRUE),breaks=20, main="4 b")
+dev.off()
+## c) distribuzione  del numero medio di contatti giornalieri che un individuo ha (media calcolata over time) IN PRESENZA DI SINTOMI1 secondo definizione di NCONTATTI2
+postscript(file="../report/Grafico4-c.ps",height=8,width=8,onefile=TRUE,horizontal=FALSE)
+hist(rowMeans((uniqueconnections1 * mask1symp),na.rm=TRUE),breaks=20, main="4 c")
+dev.off()
+## d) distribuzione  del numero medio di contatti giornalieri che un individuo ha (media calcolata over time) IN ASSENZA DI SINTOMI2 secondo definizione di NCONTATTI2
+postscript(file="../report/Grafico4-d.ps",height=8,width=8,onefile=TRUE,horizontal=FALSE)
+hist(rowMeans((uniqueconnections3 * !mask3symp),na.rm=TRUE),breaks=20, main="4 d")
+dev.off()
+## e) distribuzione  del numero medio di contatti giornalieri che un individuo ha (media calcolata over time) IN PRESENZA DI SINTOMI2 secondo definizione di NCONTATTI2
+postscript(file="../report/Grafico4-e.ps",height=8,width=8,onefile=TRUE,horizontal=FALSE)
+hist(rowMeans((uniqueconnections3 * mask3symp),na.rm=TRUE),breaks=20, main="4 e")
+dev.off()
+
+
+
+## GRAFICO5:
+## distribuzione di NCONTATTI3 sugli individui 
+hist(unlist(allc),breaks=10)
+postscript(file="../report/Grafico5.ps",height=6,width=8,onefile=TRUE,horizontal=FALSE)
+hist(rowSums(uniqueconnectionsALL),breaks=10, main= "5")
+dev.off()
+
+
+ALLuniquecontactsTOT <- list()
+for (s in names(IDconnectionsALL.S.D)){
+    for (d in names(IDconnectionsALL.S.D$s)){
+        ALLuniquecontactsTOT$s <- c(ALLuniquecontactsTOT$s,unique(IDconnectionsALL.S.D$s$d))
+    }
+}
+
+allID <- list()
+for (s in names(IDconnectionsALL.S.D)){
+    for (d in names(IDconnectionsALL.S.D[[s]])){
+        allID[[s]] <- c(allID[[s]],unique(IDconnectionsALL.S.D[[s]][[d]]))
+    }
+}
+allIDc <- c()
+for (i in names(allID)){
+    allID[[i]] <- unique(allID[[i]])
+    allIDc <- c(allIDc,length(allID[[i]]))
+}
+X11()
+hist(log(allIDc), breaks=30)
+
+## GRAFICO 6
+## - Distribuzione delle rilevazioni di prossimita per ogni soggetto lungo la giornata + media su tutti i soggetti.
+alldates <- as.Date(names(IDconnectionsALL.D.S), origin=OrigD)
+
+ss <- sapply(Proxy$time,function(x) strsplit(strsplit(x, " ")[[1]][2], ":")[[1]][1])
+
+PP <- cbind(Proxy,as.numeric(ss))
+colnames(PP)[6] <- "ss"
+idxuni <- c()
+for (i in 0:23){
+    idx <- rep(TRUE,dim(PP)[1])
+    idx[PP$ss==i] <- (!duplicated(PP[PP$ss==i,c(1,2)]))
+    PP <- PP[idx,]
+}
+
+## save(ss,PP,file='6-data.RData')
+load('6-data.RData')
+
+ProxyBK <- Proxy
+Proxy <- PP
+ss <- PP$ss
+
+nss <- as.numeric(ss)
+nssl <- list()
+nsst <- c()
+for (i in 1:length(Soggetti)){
+    nssl[[as.character(Soggetti[i])]] <- nss[which(PP$user.id==Soggetti[i])]
+    nsst <- rbind(nsst,(table(nssl[[as.character(Soggetti[i])]]))/sum(table(nssl[[as.character(Soggetti[i])]])))
+}
+rownames(nsst) <- as.character(Soggetti)
+
+postscript(file="../report/Grafico6.ps",height=6,width=8,onefile=TRUE,horizontal=FALSE)
+plot(0,type="n",xlim=c(0,24),ylim=c(min(colSds(nsst)-colMeans(nsst)/2),max((colMeans(nsst)+colSds(nsst)/2))))
+lines(colMeans(nsst),col="red",type="b")
+lines((colSds(nsst)/2)+colMeans(nsst), col="green", type="b")
+lines(colMeans(nsst) - (colSds(nsst)/2), col="green", type= "b")
+dev.off()
+
+## postscript(file="../report/Grafico6-b-51-65.ps",height=8,width=8,onefile=TRUE,horizontal=TRUE, paper="a4")
+## par(mfrow=c(5,5))
+## for (i in Soggetti[51:65]){
+## plot(nsst[as.character(i),],
+##      type="b", main=as.character(i),
+##      ylim=c(0,max(nsst[as.character(i),])))}
+## dev.off()
+
+
+postscript(file="../report/Grafico6-cb.ps",height=8,width=8,onefile=TRUE,horizontal=TRUE)
+mycols <- c("red","blue","green","cyan","black")
+par(mfrow=c(3,3))
+for (l in 9:12){  ## sono 13 0-8 9-12
+    print(i)
+    plot(0,
+         type="n",
+         xlim=c(1,24),
+         ylim=c(min(nsst[as.character(Soggetti[((l*5)+1):((l*5)+5)]),]) ,
+             max(nsst[as.character(Soggetti[((l*5)+1):((l*5)+5)]),]))
+         ##main=paste(Soggetti[((l*5)+1):((l*5)+5)])
+         )
+    for (i in ((l*5)+1):((l*5)+5)){
+        lines(nsst[as.character(Soggetti[i]),],
+              type="l", main=as.character(Soggetti[i]),
+              ylim=c(0,max(nsst[as.character(Soggetti[i]),])),
+              col=mycols[(i%%5)+1])
+        legend(x=2,
+               y=max(nsst[as.character(Soggetti[((l*5)+1):((l*5)+5)]),]),
+               col=mycols,pch=19,ncol=5,
+               legend=as.character(Soggetti[((l*5)+1):((l*5)+5)])
+               )
+    }
+}
+dev.off()
+
+
+
+## GRAFICO 7
+## - Misure sui Grafi realizzati per ogni settimana (diametro, centralita' dei nodi... )
+
+Adj <- list()
+iidx <- seq(alldates[1],alldates[length(alldates)],7)
+for (idx in iidx){
+    adj <- matrix(0,80,80)
+    for (i in 0:6){
+        print(i)
+        r <- as.numeric(names(IDconnectionsALL.D.S[[as.character(as.Date(idx + i,origin=OrigD))]]))
+        if (length(r)){
+            for (k in 1:length(r)){
+                v <- IDconnectionsALL.D.S[[as.character(as.Date(idx + i,origin=OrigD))]][as.character(r[k])]
+                if (length(v)){
+                    for (vv in v){
+                        adj[r[k],vv] <- adj[r[k],vv]+1
+                    }
+                }
+            }
+        }
+    }
+    adj <- adj+t(adj)
+    diag(adj) <- 0
+    Adj[[as.character(as.Date(idx,origin=OrigD))]] <- adj 
+}
+
+Gra <- list()
+for (i in 1:length(Adj)){
+    Gra[[names(Adj)[i]]] <- graph.adjacency(Adj[[i]],
+                                            mode=c("undirected"),
+                                            weighted=TRUE)
+}
+
+Gra1 <- list()
+
+for (i in 1:length(Gra)){
+    DIA <- get.diameter(Gra[[i]])
+    Gra1[[names(Gra)[i]]] <- delete.vertices(Gra[[i]],V(Gra[[i]])[which(degree(Gra[[i]])==0)])
+    V(Gra1[[names(Gra)[i]]])$name <- V(Gra[[i]])[which(degree(Gra[[i]])!=0)]
+}
+
+postscript(file="../report/Grafico7-degrees.ps",height=8,width=8,onefile=TRUE,horizontal=TRUE, paper="a4")
+par(mfrow=c(5,3))
+for (i in 1:length(Gra)){
+    DIA <- get.diameter(Gra1[[i]])
+    hist(degree(Gra1[[i]]),breaks=20, main=paste("Degree week",names(Gra1)[i]))
+    abline(v=mean(degree(Gra1[[i]])), col="red", lwd=2)
+}
+dev.off()
+
+cerchio <- layout.circle(Gra[[1]])
+plot(Gra1[[1]]) #,layout=cerchio)
+DIA <- get.diameter(Gra[[1]])
+length(DIA)
+E(Gra[[i]])[DIA]
+gtp <- delete.vertices(Gra[[1]],V(Gra[[1]])[which(degree(Gra[[1]])==0)])
+
+borda <- function(M){
+    el <- unique(M[1,])
+    if (length(el) != length(M[1,])){
+        print("MERDA")}
+    posl <- c()
+    for (e in 1:dim(M)[2]){
+        pos <- 0
+        for (l in 1:dim(M)[1]){
+            pos <- (pos + which(M[l,] == e))
+        }
+        posl <- c(posl,(pos/(dim(M)[1])))
+    }
+    return(posl)
+}
+
+ldist <- function(M){
+#    dd <- 0
+#    for (i in 1:dim(M)[1]){
+        dist(M, method="canberra", diag=FALSE)
+}
+
+deg <- c()
+bet <- c()
+clos <- c()
+eice <- c()
+prank <- c()
+
+for (g in Gra){
+### Degree
+    deg <- rbind(deg, sort(degree(g),decreasing=TRUE,index.return=TRUE)$ix)
+### Betweenness
+    bet <- rbind(bet, sort(betweenness(g),decreasing=TRUE,index.return=TRUE)$ix)
+### Closeness
+    clos <- rbind(clos, sort(closeness(g),decreasing=TRUE,index.return=TRUE)$ix)
+### Eigenvector centrality
+    eice <- rbind(eice, sort(evcent(g)$vector,decreasing=TRUE,index.return=TRUE)$ix)
+### PageRank
+    prank <- rbind(prank, sort(page.rank(g)$vector,decreasing=TRUE,index.return=TRUE)$ix)
+}
+degl <- sort(borda(deg), index.return=TRUE, decreasing=FALSE)$ix
+betl <- sort(borda(bet), index.return=TRUE, decreasing=FALSE)$ix
+closl <- sort(borda(clos), index.return=TRUE, decreasing=FALSE)$ix
+eicel <- sort(borda(eice), index.return=TRUE, decreasing=FALSE)$ix
+prankl <- sort(borda(prank), index.return=TRUE, decreasing=FALSE)$ix
+
+
+comm1 <- list()
+comm2 <- list()
+comm3 <- list()
+comm4 <- list()
+comm5 <- list()
+for (g in 1:length(Gra)){
+### Communities Walktrap
+    comm1[[g]] <- walktrap.community(Gra1[[g]], weights = E(Gra[[g]])$weight)
+### Communities Find community structure that minimizes the expected description length of a random walker tra-jectory
+    comm2[[g]] <- infomap.community(Gra1[[g]], e.weights = E(Gra[[g]])$weight)
+### Communities ptimizing a modularity score.
+    comm3[[g]] <- fastgreedy.community(Gra1[[g]], weights = E(Gra[[g]])$weight)
+### Spinnglass
+    if(is.connected(Gra1[[g]])){
+        comm4[[g]] <- spinglass.community(Gra1[[g]], weights = E(Gra1[[g]])$weight)}
+### Leading Eigenvector 
+    comm5[[g]] <- leading.eigenvector.community(Gra1[[g]])
+}
+
+for (i in 1:15) {
+    print(compare.communities(comm2[[1]], comm2[[i]], method = c("vi", "nmi", "split.join", "rand",
+"adjusted.rand")))
+}
+
+
+mod <- c()
+for (i in 1:15) {
+        AA <- modularity(comm1[[i]])
+        BB <- modularity(comm2[[i]])
+        #membership(comm2[[i]]),
+        CC <- modularity(comm3[[i]])
+        if(i!=15){
+            DD <- modularity(comm4[[i]])}
+        EE <- modularity(comm5[[i]])
+        mod <- rbind(mod,c(AA,BB,CC,DD,EE))
+}
+colnames(mod) <- c("Walktrap","Infomap","Fastgreedy","Spinglass","Eigenvector")
+
+postscript(file="../report/Grafico7-modularity.ps",height=8,width=8,onefile=TRUE,horizontal=TRUE, paper="a4")
+plot(0,xlim=c(0,15),ylim=c(min(mod[,c(1,3,5)]),max(mod[,c(1,3,5)])),type="n")
+lines(mod[,1],col="red",type="b")
+lines(mod[,3],col="green",type="b")
+lines(mod[,5],col="blue",type="b")
+dev.off()
+
+cc <- infomap.community(g)
+
+dendPlot(comm3[[1]],
+         mode="phylo",
+         colbar = rainbow(11, start=0.7, end=0.1),
+         edge.color = NULL
+         #use.edge.length = FALSE
+         )
+
+himl <- c()
+iml <- c()
+hl <- c()
+g1 <- Gra[[1]]
+E(g1)$weight <- E(g1)$weight/max(E(g1)$weight)
+for(g in 1:15){
+    g2 <- Gra[[g]]
+    E(g2)$weight <- E(g2)$weight/max(E(g2)$weight)
+    res <- netdist(g1,g2)
+    himl <- c(himl,res[["HIM"]])
+    iml <- c(iml,res[["IM"]])
+    hl <- c(hl,res[["H"]])
+}
+
+
+par(mfrow=c(1,3))
+postscript(file="../report/Grafico7-HIM.ps",height=8,width=8,onefile=TRUE,horizontal=TRUE, paper="a4")
+plot(himl,type="b",main="HIM Dist")
+dev.off()
+plot(iml, main="IM",type="b")
+plot(hl, main="H",type="b")
+
+
+
+##########################
+##########################
+load("1-data.RData")
+load("1bis-data.RData")
+load("2-data.RData")
+load("3-data.RData")
+load("4-data.RData")
+load("5-data.RData")
+load("6-data.RData")
+
+names(AdjL) <-as.numeric(as.Date(names(AdjL)))
+Za <- events3[-c(3,6,10),-3]  ## 3 6 10
+Z <- array(Za[,2])
+SI <- array(Za[,1])
+Za <- Za[order(Za$da1),]
+contacts <- list()
+lattime <- 3 # days before SI DICEVA 8
+inftime <- 8 # days after symptoms
+for (s in SI){ ## compute day by day contacts
+    contacts[[as.character(s)]] <- list()
+    dcc <- Za[Za$id==s,2]
+    for (d in (dcc-inftime):(dcc)){
+        cc <- AdjL[[as.character(d)]][as.character(s),as.character(SI)]
+        cc <- cc[cc!=0]
+        Start <- dcc - (lattime + inftime)
+        Stop <- dcc + inftime
+        CC <- c()
+        for (ccc in names(cc)){
+            if(
+                (as.Date(Za[Za$id==ccc,2])>Start) &
+                (as.Date(Za[Za$id==ccc,2])<Stop)){
+                CC <- c(CC,cc[ccc])}
+        }
+        contacts[[as.character(s)]][[as.character(as.Date(d,orig=OrigD))]] <- CC
+    }
+}
+
+ucontacts <- list()  ## generate uniquecontacts
+for (A in 1:length(contacts)){
+    nam <- c()
+    for (B in contacts[[A]]){
+        nam <- c(nam,names(B))
+    }
+    print(names(contacts[A]))
+    ucontacts[[names(contacts[A])]] <- unique(nam)
+}
+
+## for (S in names(ucontacts)){ ## eliminate two ways connections
+##     for (SS in ucontacts[[S]]){
+##         if (S%in%ucontacts[[SS]]){
+##             ucontacts[[SS]] <- ucontacts[[SS]][-which(ucontacts[[SS]]==S)]
+##             if(!length(ucontacts[[SS]])){
+##                 print(SS)
+##                 ucontacts <- ucontacts[-which(names(ucontacts)==SS)]
+##             }
+##         }   
+##     }
+## }
+
+x11()
+length(ucontacts)
+mycol <- rep("blue",21)
+mycol[which(Za$id%in%as.numeric(names(ucontacts)))] <- "red"
+par(mar=c(5,7,1,1))
+plot(Za$da1,xaxt='n',yaxt='n',xlab="Subject",ylab="",type="n",
+     main=paste("InfT",inftime,"LatT",lattime))
+abline(h=Za$da1,col="grey", lty=3)
+text(1:21,Za$da1,label=Za$id, col=mycol)
+axis(1,at=1:21,labels=Za$id)
+axis(2,at=Za$da1,labels=Za$da1,las=TRUE)

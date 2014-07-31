@@ -1,0 +1,8 @@
+data <- read.table("mcmc-out")
+## N L LL A B
+REP <- dim(data)[1] 
+sample <- seq(1,REP,100)
+par(mfrow=c(2, 2))
+plot(data[sample,3],type="l",main="Log Lkh")
+plot(data[sample,4],type="l",main="Alpha")
+plot(data[sample,5],type="l",main="Beta")

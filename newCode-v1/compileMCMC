@@ -1,0 +1,3 @@
+rm -f mcmc-sim-out
+rm -f mcmc-out
+clear &&  gcc -Wall -O3 sir.c mcmc.c -o mcmc -lgsl -lgslcblas -lm

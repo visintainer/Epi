@@ -1,0 +1,1 @@
+clear &&  gcc -Wall -O3 sir.c -o sir -lgsl -lgslcblas -lm
