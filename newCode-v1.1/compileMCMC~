@@ -1,0 +1,8 @@
+rm -f mcmc-sim-out
+rm -f mcmc-out
+clear 
+gcc -c leak_detector_.c
+gcc -Wall -O3 get_param.c get_line.c sir.c mcmc.c -o mcmc -lgsl -lgslcblas -lm
+gcc -o memtest leak_detctor_c.o test.o
+./memtest
+cat /home/leak_info.txt    
