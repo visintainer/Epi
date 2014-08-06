@@ -1,0 +1,3 @@
+rm -f mcmc-sim-out
+rm -f mcmc-out
+gcc -Wall -O3 get_param.c get_line.c sir.c mcmc.c -o mcmc -lgsl -lgslcblas -lm
